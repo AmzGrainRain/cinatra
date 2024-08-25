@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 namespace fs = std::filesystem;
@@ -18,6 +20,22 @@ enum class http_method {
   CONNECT,
   OPTIONS,
   DEL,
+
+  // webdav support
+  PROPFIND,
+  PROPPATCH,
+  MKCOL,
+  COPY,
+  MOVE,
+  LOCK,
+  UNLOCK,
+
+#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+  // non-standard method
+  ACL,
+  SEARCH,
+  REPORT
+#endif
 };
 enum class content_encoding { gzip, deflate, br, none };
 constexpr inline auto GET = http_method::GET;
@@ -31,6 +49,20 @@ constexpr inline auto CONNECT = http_method::CONNECT;
 constexpr inline auto TRACE = http_method::TRACE;
 #endif
 constexpr inline auto OPTIONS = http_method::OPTIONS;
+
+constexpr inline auto PROPFIND = http_method::PROPFIND;
+constexpr inline auto PROPPATCH = http_method::PROPPATCH;
+constexpr inline auto MKCOL = http_method::MKCOL;
+constexpr inline auto COPY = http_method::COPY;
+constexpr inline auto MOVE = http_method::MOVE;
+constexpr inline auto LOCK = http_method::LOCK;
+constexpr inline auto UNLOCK = http_method::UNLOCK;
+
+#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+constexpr inline auto ACL = http_method::ACL;
+constexpr inline auto SEARCH = http_method::SEARCH;
+constexpr inline auto REPORT = http_method::REPORT;
+#endif
 
 inline constexpr std::string_view method_name(http_method mthd) {
   switch (mthd) {
@@ -52,18 +84,70 @@ inline constexpr std::string_view method_name(http_method mthd) {
       return "OPTIONS"sv;
     case cinatra::http_method::TRACE:
       return "TRACE"sv;
+    case cinatra::http_method::PROPFIND:
+      return "PROPFIND"sv;
+    case cinatra::http_method::PROPPATCH:
+      return "PROPPATCH"sv;
+    case cinatra::http_method::MKCOL:
+      return "MKCOL"sv;
+    case cinatra::http_method::COPY:
+      return "COPY"sv;
+    case cinatra::http_method::MOVE:
+      return "MOVE"sv;
+    case cinatra::http_method::LOCK:
+      return "LOCK"sv;
+    case cinatra::http_method::UNLOCK:
+      return "UNLOCK"sv;
+
+#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+    case http_method::ACL:
+      return "ACL"sv;
+    case http_method::REPORT:
+      return "REPORT"sv;
+    case http_method::SEARCH:
+      return "SEARCH"sv;
+#endif
+
     default:
       return "NIL"sv;
   }
 }
 
-inline constexpr std::array<int, 20> method_table = {
-    3, 1, 9, 0, 0, 0, 4, 5, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 6, 7};
+#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+
+// performance -330% than before
+
+inline constexpr uint8_t method_table[] = {
+    0,  0, 0, 0, 0, 0, 0, 5, 6,  4,  10, 14, 0, 0, 12, 13, 8,  0, 18, 0,
+    0,  0, 0, 0, 0, 0, 3, 0, 17, 11, 0,  0,  0, 9, 2,  0,  0,  0, 0,  0,
+    16, 0, 7, 0, 1, 0, 0, 0, 0,  0,  0,  0,  0, 0, 0,  0,  19, 15};
 
 inline constexpr http_method method_type(std::string_view mthd) {
-  int index = ((mthd[0] & ~0x20) ^ ((mthd[1] + 1) & ~0x20)) % 20;
-  return (http_method)method_table[index];
+  size_t max = mthd.length(), i = 0, hash = 0;
+  while (i < max) {
+    hash += (mthd[i++] & ~0x20);
+  }
+  return static_cast<http_method>(method_table[hash % 60]);
 }
+
+#else
+
+
+// performance -253% than before
+
+inline constexpr uint8_t method_table[] = {
+    0, 0, 10, 0, 16, 11, 0, 14, 2, 0, 0, 13, 0, 0,  0,  0, 0, 0,
+    0, 0, 0,  4, 3,  9,  8, 5,  6, 0, 7, 0,  0, 15, 12, 0, 1};
+
+inline constexpr http_method method_type(std::string_view mthd) {
+  size_t max = mthd.length(), i = 0, hash = 0;
+  while (i < max) {
+    hash += (mthd[i++] & ~0x20);
+  }
+  return static_cast<http_method>(method_table[hash % 38]);
+}
+
+#endif
 
 enum class transfer_type { CHUNKED, ACCEPT_RANGES };
 
