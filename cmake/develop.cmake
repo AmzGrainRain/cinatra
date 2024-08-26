@@ -61,10 +61,16 @@ endif()
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake;${CMAKE_MODULE_PATH}")
 
+set(ENABLE_WEBDAV_EXTEND OFF)
 SET(ENABLE_GZIP OFF)
 SET(ENABLE_SSL OFF)
 SET(ENABLE_CLIENT_SSL OFF)
 SET(ENABLE_BROTLI OFF)
+
+if (WEBDAV_EXTEND)
+    add_definitions(-DCINATRA_WEBDAV_EXTEND)
+    message(STATUS "Enable non-standard WebDAV http method support.")
+endif();
 
 if (ENABLE_SSL)
 	add_definitions(-DCINATRA_ENABLE_SSL)

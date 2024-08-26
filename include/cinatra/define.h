@@ -20,8 +20,6 @@ enum class http_method {
   CONNECT,
   OPTIONS,
   DEL,
-
-  // webdav support
   PROPFIND,
   PROPPATCH,
   MKCOL,
@@ -30,8 +28,7 @@ enum class http_method {
   LOCK,
   UNLOCK,
 
-#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
-  // non-standard method
+#ifdef CINATRA_WEBDAV_EXTEND
   ACL,
   SEARCH,
   REPORT
@@ -58,7 +55,7 @@ constexpr inline auto MOVE = http_method::MOVE;
 constexpr inline auto LOCK = http_method::LOCK;
 constexpr inline auto UNLOCK = http_method::UNLOCK;
 
-#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+#ifdef CINATRA_WEBDAV_EXTEND
 constexpr inline auto ACL = http_method::ACL;
 constexpr inline auto SEARCH = http_method::SEARCH;
 constexpr inline auto REPORT = http_method::REPORT;
@@ -99,7 +96,7 @@ inline constexpr std::string_view method_name(http_method mthd) {
     case cinatra::http_method::UNLOCK:
       return "UNLOCK"sv;
 
-#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+#ifdef CINATRA_WEBDAV_EXTEND
     case http_method::ACL:
       return "ACL"sv;
     case http_method::REPORT:
@@ -113,7 +110,7 @@ inline constexpr std::string_view method_name(http_method mthd) {
   }
 }
 
-#ifdef NON_STANDARD_HTTP_METHOD_SUPPORT
+#ifdef CINATRA_WEBDAV_EXTEND
 
 // performance -330% than before
 
@@ -131,7 +128,6 @@ inline constexpr http_method method_type(std::string_view mthd) {
 }
 
 #else
-
 
 // performance -253% than before
 
