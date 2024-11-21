@@ -351,7 +351,14 @@ class coro_http_server {
     }
 
     if (!file_path.empty()) {
-      static_dir_ = std::filesystem::path(file_path).make_preferred().string();
+      file_path = std::filesystem::path(file_path).filename().string();
+      if (file_path.empty()) {
+        static_dir_ = fs::absolute(fs::current_path().string()).string();
+      }
+      else {
+        static_dir_ =
+            std::filesystem::path(file_path).make_preferred().string();
+      }
     }
     else {
       static_dir_ = fs::absolute(fs::current_path().string()).string();
@@ -604,7 +611,7 @@ class coro_http_server {
 
  private:
   std::error_code listen() {
-    CINATRA_LOG_INFO << "begin to listen";
+    CINATRA_LOG_INFO << "begin to listen " << port_;
     using asio::ip::tcp;
     asio::error_code ec;
 
