@@ -950,7 +950,7 @@ TEST_CASE("test summary with illegal quantities") {
   CHECK(str.find("test_summary_sum") != std::string::npos);
   CHECK(str.find("test_summary{quantile=\"") != std::string::npos);
   CHECK(result[0] < 0);
-  CHECK(result[1] < 0);
+  CHECK(result[1] == 0);
   CHECK(result[result.size() - 1] > result[result.size() - 2]);
 
 #ifdef CINATRA_ENABLE_METRIC_JSON
@@ -958,7 +958,7 @@ TEST_CASE("test summary with illegal quantities") {
   summary.serialize_to_json(str_json);
   std::cout << str_json << "\n";
   std::cout << str_json.size() << std::endl;
-  CHECK(str_json.size() == 233);
+  CHECK(str_json.size() == 222);
 #endif
 }
 
@@ -994,7 +994,7 @@ TEST_CASE("test summary with many quantities") {
   summary.serialize_to_json(str_json);
   std::cout << str_json << "\n";
   std::cout << str_json.size() << std::endl;
-  CHECK(str_json.size() == 8868);
+  CHECK(str_json.size() == 8857);
 #endif
 }
 
@@ -1971,14 +1971,32 @@ TEST_CASE("test metric manager clean expired label") {
   auto& inst = dynamic_metric_manager<test_tag>::instance();
   auto pair = inst.create_metric_dynamic<dynamic_counter_1t>(
       std::string("some_counter"), "", std::array<std::string, 1>{"url"});
+  auto summary = std::make_shared<basic_dynamic_summary<2>>(
+      std::string("test_summary"), std::string("summary help"),
+      std::vector<double>{0.5, 0.9, 0.95, 0.99},
+      std::array<std::string, 2>{"method", "url"});
+  auto h = std::make_shared<dynamic_histogram_t>(
+      std::string("test"), std::string("help"),
+      std::vector<double>{5.23, 10.54, 20.0, 50.0, 100.0},
+      std::array<std::string, 2>{"method", "url"});
+  inst.register_metric(summary);
+  inst.register_metric(h);
   auto c = pair.second;
   c->inc({"/"});
   c->inc({"/test"});
+  summary->observe({"GET", "test"}, 10);
+  h->observe({"GET", "test"}, 10);
   CHECK(c->label_value_count() == 2);
+  CHECK(summary->label_value_count() == 1);
+  CHECK(h->label_value_count() == 1);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   c->inc({"/index"});
   size_t count = c->label_value_count();
   CHECK(count == 1);
+  auto ct1 = summary->label_value_count();
+  CHECK(ct1 == 0);
+  auto ct2 = h->label_value_count();
+  CHECK(ct2 == 0);
 }
 
 TEST_CASE("test remove label value") {
@@ -2003,6 +2021,24 @@ TEST_CASE("test remove label value") {
   CHECK(!counter.has_label_value(std::vector<std::string>{"/", "test"}));
   CHECK(!counter.has_label_value(std::vector<std::string>{"/", "200", "test"}));
   CHECK(!counter.has_label_value(std::vector<std::string>{}));
+}
+
+TEST_CASE("test static summary with 0 and 1 quantiles") {
+  {
+    ylt::metric::summary_t s("test", "help", {0, 1});
+    for (uint64_t i = 0; i < 100ull; ++i) {
+      s.observe(1);
+    }
+    auto result = s.get_rates();
+    CHECK(result[0] == 1);
+    CHECK(result[1] == 1);
+  }
+  {
+    ylt::metric::summary_t s("test", "help", {0, 1});
+    auto result = s.get_rates();
+    CHECK(result[0] == 0);
+    CHECK(result[1] == 0);
+  }
 }
 
 DOCTEST_MSVC_SUPPRESS_WARNING_WITH_PUSH(4007)

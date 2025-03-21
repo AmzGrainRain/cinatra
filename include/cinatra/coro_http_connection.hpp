@@ -131,13 +131,24 @@ class coro_http_connection
         break;
       }
 
+      if (parser_.body_len() > max_http_body_len_ || parser_.body_len() < 0)
+          [[unlikely]] {
+        CINATRA_LOG_ERROR << "invalid http content length: "
+                          << parser_.body_len();
+        response_.set_status_and_content(status_type::bad_request,
+                                         "invalid http content length");
+        co_await reply();
+        close();
+        break;
+      }
+
       head_buf_.consume(size);
       keep_alive_ = check_keep_alive();
 
       auto type = request_.get_content_type();
 
       if (type != content_type::chunked && type != content_type::multipart) {
-        size_t body_len = parser_.body_len();
+        size_t body_len = (size_t)parser_.body_len();
         if (body_len == 0) {
           if (parser_.method() == "GET"sv) {
             if (request_.is_upgrade()) {
@@ -209,83 +220,85 @@ class coro_http_connection
           co_await router_.route_coro(coro_handler, request_, response_, key);
         }
         else {
-          if (default_handler_) {
-            co_await default_handler_(request_, response_);
+          bool is_exist = false;
+          bool is_coro_exist = false;
+          bool is_matched_regex_router = false;
+          std::function<void(coro_http_request & req,
+                             coro_http_response & resp)>
+              handler;
+          std::string method_str{parser_.method()};
+          std::string url_path = method_str;
+          url_path.append(" ").append(parser_.url());
+          std::tie(is_exist, handler, request_.params_) =
+              router_.get_router_tree()->get(url_path, method_str);
+          if (is_exist) {
+            if (handler) {
+              (handler)(request_, response_);
+            }
+            else {
+              response_.set_status(status_type::not_found);
+            }
           }
           else {
-            bool is_exist = false;
-            std::function<void(coro_http_request & req,
-                               coro_http_response & resp)>
-                handler;
-            std::string method_str{parser_.method()};
-            std::string url_path = method_str;
-            url_path.append(" ").append(parser_.url());
-            std::tie(is_exist, handler, request_.params_) =
-                router_.get_router_tree()->get(url_path, method_str);
-            if (is_exist) {
-              if (handler) {
-                (handler)(request_, response_);
+            std::function<async_simple::coro::Lazy<void>(
+                coro_http_request & req, coro_http_response & resp)>
+                coro_handler;
+
+            std::tie(is_coro_exist, coro_handler, request_.params_) =
+                router_.get_coro_router_tree()->get_coro(url_path, method_str);
+
+            if (is_coro_exist) {
+              if (coro_handler) {
+                co_await coro_handler(request_, response_);
               }
               else {
                 response_.set_status(status_type::not_found);
               }
             }
             else {
-              bool is_coro_exist = false;
-              std::function<async_simple::coro::Lazy<void>(
-                  coro_http_request & req, coro_http_response & resp)>
-                  coro_handler;
+              // coro regex router
+              auto coro_regex_handlers = router_.get_coro_regex_handlers();
+              if (coro_regex_handlers.size() != 0) {
+                for (auto &pair : coro_regex_handlers) {
+                  std::string coro_regex_key{key};
 
-              std::tie(is_coro_exist, coro_handler, request_.params_) =
-                  router_.get_coro_router_tree()->get_coro(url_path,
-                                                           method_str);
-
-              if (is_coro_exist) {
-                if (coro_handler) {
-                  co_await coro_handler(request_, response_);
-                }
-                else {
-                  response_.set_status(status_type::not_found);
+                  if (std::regex_match(coro_regex_key, request_.matches_,
+                                       std::get<0>(pair))) {
+                    auto coro_handler = std::get<1>(pair);
+                    if (coro_handler) {
+                      co_await coro_handler(request_, response_);
+                      is_matched_regex_router = true;
+                    }
+                  }
                 }
               }
-              else {
-                bool is_matched_regex_router = false;
-                // coro regex router
-                auto coro_regex_handlers = router_.get_coro_regex_handlers();
-                if (coro_regex_handlers.size() != 0) {
-                  for (auto &pair : coro_regex_handlers) {
-                    std::string coro_regex_key{key};
-
-                    if (std::regex_match(coro_regex_key, request_.matches_,
+              // regex router
+              if (!is_matched_regex_router) {
+                auto regex_handlers = router_.get_regex_handlers();
+                if (regex_handlers.size() != 0) {
+                  for (auto &pair : regex_handlers) {
+                    std::string regex_key{key};
+                    if (std::regex_match(regex_key, request_.matches_,
                                          std::get<0>(pair))) {
-                      auto coro_handler = std::get<1>(pair);
-                      if (coro_handler) {
-                        co_await coro_handler(request_, response_);
+                      auto handler = std::get<1>(pair);
+                      if (handler) {
+                        (handler)(request_, response_);
                         is_matched_regex_router = true;
                       }
                     }
                   }
                 }
-                // regex router
-                if (!is_matched_regex_router) {
-                  auto regex_handlers = router_.get_regex_handlers();
-                  if (regex_handlers.size() != 0) {
-                    for (auto &pair : regex_handlers) {
-                      std::string regex_key{key};
-                      if (std::regex_match(regex_key, request_.matches_,
-                                           std::get<0>(pair))) {
-                        auto handler = std::get<1>(pair);
-                        if (handler) {
-                          (handler)(request_, response_);
-                          is_matched_regex_router = true;
-                        }
-                      }
-                    }
-                  }
+              }
+              // radix route -> radix coro route -> regex coro -> regex ->
+              // default -> not found
+              if (!is_matched_regex_router) {
+                if (default_handler_) {
+                  co_await default_handler_(request_, response_);
                 }
-                // not found
-                if (!is_matched_regex_router)
+                else {
+                  // not found
                   response_.set_status(status_type::not_found);
+                }
               }
             }
           }
@@ -294,10 +307,12 @@ class coro_http_connection
 
       if (!response_.get_delay()) {
         if (head_buf_.size()) {
-          if (type == content_type::multipart) {
-            response_.set_status_and_content(
-                status_type::not_implemented,
-                "mutipart handler not implemented or incorrect implemented");
+          if (type == content_type::multipart ||
+              type == content_type::chunked) {
+            if (response_.content().empty())
+              response_.set_status_and_content(
+                  status_type::not_implemented,
+                  "mutipart handler not implemented or incorrect implemented");
             co_await reply();
             close();
             CINATRA_LOG_ERROR
@@ -375,6 +390,11 @@ class coro_http_connection
         }
       }
 
+      if (!keep_alive_) {
+        // now in io thread, so can close socket immediately.
+        close();
+      }
+
       response_.clear();
       request_.clear();
       buffers_.clear();
@@ -394,10 +414,6 @@ class coro_http_connection
       if (need_to_bufffer) {
         response_.to_buffers(buffers_, chunk_size_str_);
       }
-      int64_t send_size = 0;
-      for (auto &buf : buffers_) {
-        send_size += buf.size();
-      }
       std::tie(ec, size) = co_await async_write(buffers_);
     }
     else {
@@ -411,11 +427,6 @@ class coro_http_connection
       CINATRA_LOG_ERROR << "async_write error: " << ec.message();
       close();
       co_return false;
-    }
-
-    if (!keep_alive_) {
-      // now in io thread, so can close socket immediately.
-      close();
     }
 
     co_return true;
@@ -435,12 +446,21 @@ class coro_http_connection
     return remote_addr_;
   }
 
+  size_t available() {
+    std::error_code ec{};
+    return socket_.available(ec);
+  }
+
   void set_multi_buf(bool r) { multi_buf_ = r; }
 
   void set_default_handler(
       std::function<async_simple::coro::Lazy<void>(
           coro_http_request &, coro_http_response &)> &handler) {
     default_handler_ = handler;
+  }
+
+  void set_max_http_body_size(int64_t max_size) {
+    max_http_body_len_ = max_size;
   }
 
 #ifdef INJECT_FOR_HTTP_SEVER_TEST
@@ -457,11 +477,6 @@ class coro_http_connection
       CINATRA_LOG_ERROR << "async_write error: " << ec.message();
       close();
       co_return false;
-    }
-
-    if (!keep_alive_) {
-      // now in io thread, so can close socket immediately.
-      close();
     }
 
     co_return true;
@@ -597,7 +612,7 @@ class coro_http_connection
     std::string dest_buf;
     if (is_client_ws_compressed_ && msg.size() > 0) {
       if (!cinatra::gzip_codec::deflate(msg, dest_buf)) {
-        CINATRA_LOG_ERROR << "compuress data error, data: " << msg;
+        CINATRA_LOG_ERROR << "compress data error, data: " << msg;
         co_return std::make_error_code(std::errc::protocol_error);
       }
 
@@ -700,7 +715,7 @@ class coro_http_connection
           } break;
           case cinatra::ws_frame_type::WS_PING_FRAME: {
             result.data = {payload.data(), payload.size()};
-            auto ec = co_await write_websocket("pong", opcode::pong);
+            auto ec = co_await write_websocket(result.data, opcode::pong);
             if (ec) {
               close();
               result.ec = ec;
@@ -708,7 +723,7 @@ class coro_http_connection
           } break;
           case cinatra::ws_frame_type::WS_PONG_FRAME: {
             result.data = {payload.data(), payload.size()};
-            auto ec = co_await write_websocket("ping", opcode::ping);
+            auto ec = co_await write_websocket(result.data, opcode::ping);
             result.ec = ec;
           } break;
           default:
@@ -975,6 +990,7 @@ class coro_http_connection
       default_handler_ = nullptr;
   std::string chunk_size_str_;
   std::string remote_addr_;
+  int64_t max_http_body_len_ = 0;
 #ifdef INJECT_FOR_HTTP_SEVER_TEST
   bool write_failed_forever_ = false;
   bool read_failed_forever_ = false;
