@@ -818,9 +818,7 @@ class coro_http_server {
                                  std::string_view content_range = "") {
     std::string header_str = "HTTP/1.1 ";
     header_str.append(std::to_string(status));
-    header_str.append(
-        " OK\r\nAccess-Control-Allow-origin: "
-        "*\r\nAccept-Ranges: bytes\r\n");
+    header_str.append(" OK\r\nAccept-Ranges: bytes\r\n");
     if (!content_range.empty()) {
       header_str.append(content_range);
     }
@@ -1000,7 +998,7 @@ class coro_http_server {
   size_t chunked_size_ = 1024 * 10;
 
   std::unordered_map<std::string, std::string> static_file_cache_;
-  file_resp_format_type format_type_ = file_resp_format_type::chunked;
+  file_resp_format_type format_type_ = file_resp_format_type::range;
 #ifdef CINATRA_ENABLE_SSL
   std::string cert_file_;
   std::string key_file_;
